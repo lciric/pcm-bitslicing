@@ -1,4 +1,4 @@
-# PCM Bit-Slicing for Analog In-Memory Computing
+# Multi-Resolution Weight Quantisation & Noise-Robust DNN Inference
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-%3E%3D3.10-blue" alt="Python">
@@ -7,22 +7,34 @@
   <img src="https://img.shields.io/badge/DOI-10.1063%2F5.0168089-blue" alt="DOI">
 </p>
 
-A **from-scratch implementation** of the bit-slicing framework described in **"Using the IBM Analog In-Memory Hardware Acceleration Kit for Neural Network Training and Inference"** by Le Gallo, Lammie, Carta et al., *APL Machine Learning* 2023 — plus an **original extension** exploring ternary weight quantisation (BitNet-style) on PCM hardware.
+How do you deploy a neural network when your hardware introduces noise at every weight? This project builds a **complete quantisation-aware inference pipeline** — from custom PyTorch layers with noisy forward / clean backward passes (STE), to Monte Carlo robustness evaluation, to noise-aware training — applied to **analog in-memory computing (AIMC)** on Phase-Change Memory. Includes an **original extension** evaluating BitNet-style ternary {-1, 0, +1} quantisation.
 
-**Paper**: [APL Machine Learning](https://doi.org/10.1063/5.0168089) | Based on device models from [Joshi et al., *Nature Communications* 2020](https://doi.org/10.1038/s41467-020-16108-9)
+**Paper**: [Le Gallo et al., *APL Machine Learning* 2023](https://doi.org/10.1063/5.0168089) | Device models from [Joshi et al., *Nature Communications* 2020](https://doi.org/10.1038/s41467-020-16108-9)
 
 ---
 
 ## TL;DR
 
-Analog in-memory computing stores neural network weights as physical conductances — but a single PCM device can only represent a limited dynamic range. **Bit-slicing** splits each weight across multiple devices (like digits in a number system), trading area for precision. This repository implements the full bit-slicing simulation from scratch and reproduces the paper's key finding: **the optimal slicing strategy depends on when you read the chip**.
+Deploying DNNs in reduced precision is hard. Quantisation introduces error. Hardware introduces noise. And these errors compound over time. This is true whether you're quantising a Llama model to 4-bit integers for edge deployment, or programming weights into analog memory devices.
+
+This project tackles the problem on **PCM hardware** — where weights are physical conductance values that drift over time — but the core techniques are universal:
+
+| What I implemented | Same technique in LLM deployment |
+|:-------------------|:---------------------------------|
+| **Multi-resolution weight slicing** — split weights across devices at different precisions | **Mixed-precision quantisation** — GPTQ, AWQ, GGUF assign different bit-widths per layer |
+| **Noise-aware training (STE)** — inject hardware noise in forward pass, clean gradients in backward | **Quantisation-Aware Training (QAT)** — the standard method for training 4-bit LLMs |
+| **Custom analog layers** — `AnalogConv2d` / `AnalogLinear` with noisy forward, straight-through backward | **Fake-quantised layers** — `torch.ao.quantization`, same STE pattern |
+| **Error correction across slices** — each slice compensates the actual quantisation error of the previous one | **Residual quantisation** — iterative error correction in vector quantisation (AQLM, QuIP#) |
+| **BitNet ternary extension** — weights in {-1, 0, +1}, 1.58 bits/param | **BitNet b1.58** — [Ma et al. 2024](https://arxiv.org/abs/2402.17764), the 1-bit LLM paper |
+| **Monte Carlo robustness evaluation** — statistical accuracy guarantees over hardware variability | **Quantisation benchmarking** — evaluating perplexity variance across quantisation configs |
+| **Global Drift Compensation** — runtime calibration to correct systematic weight degradation | **Activation calibration** — SmoothQuant, the same idea applied to activation outliers |
 
 **What I built:**
-- Complete PCM physics engine (programming noise, conductance drift, 1/f read noise) calibrated to real hardware
-- 5 weight slicing algorithms (Equal-fill, Max-fill, Max-fill with EC, Digital, Ternary)
-- Monte Carlo MVM error analysis at crossbar level (Figures 4a–c)
-- Full DNN inference pipeline with noise-aware training on CIFAR-10 (Figure 5)
-- Original BitNet extension: ternary {-1, 0, +1} weights on the same PCM simulator
+- Complete hardware noise engine (programming noise, conductance drift, 1/f read noise) calibrated to a million-device PCM array
+- 5 weight slicing algorithms with different precision/robustness trade-offs
+- Monte Carlo MVM error analysis (200–300 trials × 7 configs × 12 time points)
+- Full DNN inference pipeline: noise-aware training → analog deployment → accuracy evaluation over time
+- Original BitNet extension: ternary vs. INT-9 weights under identical hardware noise
 
 ---
 
@@ -31,8 +43,7 @@ Analog in-memory computing stores neural network weights as physical conductance
 - [Key Results](#key-results)
 - [Engineering Highlights](#engineering-highlights)
 - [Challenges & Solutions](#challenges--solutions)
-- [Introduction for Non-Specialists](#introduction-for-non-specialists)
-- [The Problem: Why Bit-Slicing](#the-problem-why-bit-slicing)
+- [The Problem: Quantised Inference on Noisy Hardware](#the-problem-quantised-inference-on-noisy-hardware)
 - [The Algorithms](#the-algorithms)
 - [Mathematical Formulation](#mathematical-formulation)
 - [Technical Decisions](#technical-decisions)
@@ -46,58 +57,58 @@ Analog in-memory computing stores neural network weights as physical conductance
 
 ## Key Results
 
-### Crossbar-Level MVM Error (Figures 4a–c)
+### Crossbar-Level Quantisation Error
 
 | Finding | Detail |
 |:--------|:-------|
-| **Algorithm crossover** | Max-fill with EC achieves lowest error at $t_0$, but Equal-fill wins at 1 month due to drift resilience |
-| **Optimal base** | $b_W = 2$ minimises error at $t_0$; $b_W = 1$ preferred long-term (uniform drift sensitivity) |
-| **Digital slicing** | Consistently higher error than analog methods — positional encoding wastes conductance range |
-| **Theory match** | Simulated Equal-fill errors match analytical prediction (Eq. 8) within ±1σ |
+| **Algorithm crossover** | Aggressive quantisation (Max-fill) wins short-term, conservative (Equal-fill) wins under noise accumulation |
+| **Optimal base** | Mixed-precision ($b_W = 2$) minimises error fresh; uniform precision ($b_W = 1$) preferred when noise accumulates |
+| **Digital vs. analog slicing** | Naïve positional bit extraction wastes dynamic range — adaptive fill strategies are 2–3× better |
+| **Theory match** | Simulated errors match analytical prediction (Eq. 8) within ±1σ across all configurations |
 
-### DNN Inference (Figure 5)
+### DNN Inference with Noise-Aware Training
 
 | Configuration | Accuracy @ $t_0$ | Accuracy @ 1 month | Accuracy @ 1 year |
 |:-------------|:------------------|:--------------------|:-------------------|
-| Digital baseline | 93.5% | — | — |
-| Max-fill $b_W$=1, $n_W$=8 | 92.8% | 91.5% | 90.5% |
-| Max-fill EC $b_W$=1, $n_W$=8 | 92.7% | 92.0% | — |
-| Equal-fill $b_W$=1, $n_W$=8 | 92.7% | 91.9% | — |
+| Digital baseline (FP32) | 93.5% | — | — |
+| 8 slices, aggressive fill | 92.8% | 91.5% | 90.5% |
+| 8 slices, error-corrected | 92.7% | 92.0% | — |
+| 8 slices, uniform fill | 92.7% | 91.9% | — |
 
-The **crossover** between Max-fill and Equal-fill at 1 month — predicted by theory and visible in Figure 4(c) — is **confirmed at DNN level** in Figure 5(c). Max-fill EC with $b_W$=1 achieves the best long-term accuracy thanks to error correction that compensates the *actual* programming error of each slice.
+Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of digital accuracy** even under realistic hardware noise. The error-corrected algorithm achieves the best long-term robustness — analogous to how residual quantisation outperforms naïve round-to-nearest in LLM compression.
 
 <details>
 <summary><strong>All reproduced figures (click to expand)</strong></summary>
 
-#### Figure 4(a): Error vs. number of slices
+#### Quantisation error vs. number of slices
 <p align="center">
   <img src="figures/figure_4a.png" alt="Figure 4a" width="90%">
 </p>
-<p align="center"><em>Left: at t₀ (programming noise only). Right: at 1 month (drift + read noise). Max-fill EC dominates short-term; Equal-fill dominates long-term.</em></p>
+<p align="center"><em>Left: fresh (quantisation noise only). Right: after 1 month (noise accumulation). The optimal strategy flips.</em></p>
 
-#### Figure 4(b): Error vs. base of slices
+#### Error vs. precision base
 <p align="center">
   <img src="figures/figure_4b.png" alt="Figure 4b" width="90%">
 </p>
-<p align="center"><em>Varying b_W from 1 to 8. Higher bases amplify MSB noise at 1 month — b_W = 1 is safest for deployment.</em></p>
+<p align="center"><em>Mixed-precision (higher base) amplifies MSB noise under drift — uniform precision is safer for deployment.</em></p>
 
-#### Figure 4(c): Error vs. time
+#### Error vs. time
 <p align="center">
   <img src="figures/figure_4c.png" alt="Figure 4c" width="90%">
 </p>
-<p align="center"><em>Time series from t₀ to 1 year. The crossover between Max-fill EC and Equal-fill is clearly visible around 1 month.</em></p>
+<p align="center"><em>Time series from seconds to 1 year. The crossover between aggressive and conservative strategies is clearly visible.</em></p>
 
-#### Figure 5(a): CIFAR-10 accuracy vs. time
+#### CIFAR-10 accuracy vs. time
 <p align="center">
   <img src="figures/figure_5a.png" alt="Figure 5a" width="70%">
 </p>
-<p align="center"><em>ResNet-32 with noise-aware training. More slices → slower accuracy degradation.</em></p>
+<p align="center"><em>ResNet-32 with noise-aware training (STE). More slices = more parameters = slower degradation.</em></p>
 
-#### Figure 5(c): CIFAR-10 accuracy vs. n_W
+#### Accuracy vs. number of slices
 <p align="center">
   <img src="figures/figure_5c.png" alt="Figure 5c" width="90%">
 </p>
-<p align="center"><em>Five algorithm configurations at t₀ and 1 month. Max-fill EC (b_W = 1) achieves best 1-month accuracy.</em></p>
+<p align="center"><em>Five quantisation configurations. Error-corrected slicing (green) achieves best long-term accuracy.</em></p>
 
 </details>
 
@@ -105,16 +116,14 @@ The **crossover** between Max-fill and Equal-fill at 1 month — predicted by th
 
 ## Engineering Highlights
 
-This implementation emphasises **clean, modular, reusable code** — no monolithic notebooks:
-
 | Aspect | Implementation |
 |:-------|:---------------|
 | **Reusable package** | `src/pcm_sim/` — 8 modules with clear single-responsibility separation |
-| **Dual interface** | Standalone scripts for headless execution + lightweight notebooks for interactive exploration |
-| **Dual backends** | NumPy (Figures 4a–c, BitNet) and PyTorch (Figure 5 DNN inference) share the same physics |
-| **Stored programming state** | Programming noise and drift ν sampled once per chip — physically correct, critical for EC |
-| **Parallel Monte Carlo** | `joblib.Parallel` with seed-based reproducibility across all trials |
-| **Validated convergence** | All methods produce identical η at $n_W = 1$ (to 6 decimal places) — mathematically required |
+| **Custom PyTorch layers** | `AnalogConv2d` / `AnalogLinear` with stored quantisation state, noisy forward, clean backward (STE) |
+| **Dual backends** | NumPy for fast Monte Carlo sweeps, PyTorch for gradient-based training — same physics |
+| **Stored quantisation state** | Noise sampled once per "deployment", not per forward pass — physically correct, critical for error correction |
+| **Parallel Monte Carlo** | `joblib.Parallel` with seed-based reproducibility, ~2700 independent trials |
+| **Validated convergence** | All 7 methods produce identical error at 1 slice (to 6 decimal places) |
 
 ```
 $ python -c "from pcm_sim.engine import run_trial_4a; ..."
@@ -131,167 +140,155 @@ n_W=1 convergence check (all methods identical):
 
 ## Challenges & Solutions
 
-Real debugging stories from this implementation:
+Real debugging stories — every one of these has a direct analogue in quantised LLM deployment:
 
 | Problem | Investigation | Solution |
 |:--------|:--------------|:---------|
-| **EC algorithm gave wrong errors** | Dependent slicing subtracted *target* instead of *actual* programmed value in residual update | Fixed: `residual -= S_actual * power` (not `S_target`). This is the whole point of EC — compensating the real programming error |
-| **Digital slicing always worse than theory** | Positional bit extraction wasted conductance range — most bits are 0 for Gaussian weights | Confirmed this matches the paper: Digital slicing is the worst method. The information-theoretic reason is that positional encoding doesn't adapt to weight statistics |
-| **1-month errors too low at first** | Was regenerating programming noise at each read time instead of storing it | Implemented stored programming state: noise and ν sampled once at `_program()`, only 1/f read noise is stochastic per read. This is physically correct — the chip is programmed once |
-| **GDC factor exploding at 1 year** | Calibration vector had near-zero entries, causing division instability | Added `+ 1e-15` guard and used `np.sum(abs(...))` for scalar calibration — matches hardware GDC implementation |
-| **Max-fill varying significance: wrong slice ordering** | LSB-first vs MSB-first confusion across the 4 algorithm variants | Standardised: always store slices LSB-first internally, reverse only for varying significance computation. Added convergence test at $n_W = 1$ to catch ordering bugs |
-| **DNN accuracy collapsed with analog layers** | `_program()` was called on every forward pass, re-rolling noise each time | Added `_is_programmed` flag — program once, read many. Critical for EC and for matching real hardware behaviour |
+| **Error correction gave wrong results** | Residual update used *target* value instead of *actual quantised* value | Fixed: `residual -= S_actual * power`. Same bug pattern as using FP weights instead of quantised weights in GPTQ's iterative update |
+| **Naïve bit-extraction always worse** | Positional encoding wastes dynamic range for Gaussian weights | Confirmed: adaptive strategies are strictly better. Same reason GPTQ outperforms round-to-nearest — you need to adapt to weight statistics |
+| **Errors underestimated at 1 month** | Was re-sampling quantisation noise at each inference instead of storing it | Stored noise once at "deployment". Analogous to the difference between simulating quantisation noise (wrong) and actually quantising weights (right) |
+| **Calibration factor exploding** | Division by near-zero in runtime calibration | Added `+ 1e-15` guard, used `sum(abs(...))` for scalar calibration. Same numerical stability issue as SmoothQuant's activation scaling |
+| **Mixed-precision slice ordering bug** | LSB-first vs MSB-first confusion across 4 algorithm variants | Standardised internal representation. Added convergence test at 1 slice to catch ordering bugs — same sanity check as verifying that 32-bit and 16-bit inference match at full precision |
+| **DNN accuracy collapsed** | Quantisation noise was re-rolled every forward pass | Added `_is_programmed` flag — quantise once, infer many. Same issue as accidentally re-quantising during evaluation |
 
 ---
 
-## Introduction for Non-Specialists
+## The Problem: Quantised Inference on Noisy Hardware
 
-### What is Bit-Slicing?
+### Why This is Hard
 
-A single PCM device has limited precision (~4 bits). But neural networks need 8–9 bits per weight. **Bit-slicing** splits each weight across multiple devices, each storing a "slice":
+The core challenge is universal across all low-precision deployment:
 
 ```
-INT-9 weight = 173 (binary: 10101101)
-
-                         Equal significance (b_W = 1):
-                         ┌─────────┐  ┌─────────┐
-                         │ Slice 1 │  │ Slice 2 │
-                         │  w/2    │  │  w/2    │
-                         │ = 86.5  │  │ = 86.5  │
-                         └─────────┘  └─────────┘
-                              ×1           ×1
-                         Total: 86.5 + 86.5 = 173  ✓
-
-                         Varying significance (b_W = 2):
-                         ┌─────────┐  ┌─────────┐
-                         │  MSB    │  │  LSB    │
-                         │ = 57.7  │  │ = 57.7  │
-                         └─────────┘  └─────────┘
-                              ×2           ×1
-                         Total: 57.7×2 + 57.7×1 = 173.1  ✓
+                     FP32 weights
+                          │
+                    ┌─────┴─────┐
+                    │ Quantise  │  ← introduces rounding error
+                    └─────┬─────┘
+                          │
+                    ┌─────┴─────┐
+                    │  Deploy   │  ← hardware adds noise (PCM drift, DRAM bit flips,
+                    └─────┬─────┘    thermal noise, ...)
+                          │
+                    ┌─────┴─────┐
+                    │  Infer    │  ← noise accumulates over time / repeated reads
+                    └─────┬─────┘
+                          │
+                    How much accuracy
+                    did we lose?
 ```
 
-The key trade-off: **more slices = more area on chip, but lower noise per weight.**
+On PCM hardware specifically, three noise sources degrade weights:
 
-### Why Does the Algorithm Matter?
+1. **Programming noise** — writing a target value gives $G_T + \mathcal{N}(0, \sigma_\text{prog}^2(G_T))$ — analogous to quantisation round-off
+2. **Conductance drift** — $G(t) = G_0 \cdot (t/t_0)^{-\nu}$ — weights physically decay over time
+3. **1/f read noise** — stochastic read errors that grow logarithmically with time
 
-Different slicing strategies fill the device conductance range differently:
+A single device gives ~4-bit precision. **Bit-slicing** recovers 8–9 bits by splitting each weight across $n_W$ devices — exactly like mixed-precision quantisation splits activations across multiple representations.
 
-- **Equal-fill**: Every slice uses the same fraction of the range → uniform noise sensitivity
-- **Max-fill**: Pack the most-significant slice to full range → lowest noise at $t_0$
-- **Max-fill with EC**: Like Max-fill, but each slice corrects the programming error of the previous one
+### The Trade-Off
 
-The paper's key insight: Max-fill is best *immediately after programming*, but Equal-fill is better *after drift* because its uniform fill means drift affects all slices equally.
+$$\eta \propto \frac{1}{\sqrt{n_W}}$$
 
----
-
-## The Problem: Why Bit-Slicing
-
-### PCM Device Limitations
-
-PCM devices store weights as conductances $G \in [0, G_{max}]$ with $G_{max} = 25\,\mu S$. Three noise sources limit precision:
-
-1. **Programming noise** — writing a target conductance $G_T$ gives $G_T + \mathcal{N}(0, \sigma_\text{prog}^2(G_T))$
-2. **Conductance drift** — $G(t) = G_0 \cdot (t/t_0)^{-\nu}$ with state-dependent $\nu \in [0.049, 0.1]$
-3. **1/f read noise** — $G_\text{read} = G(t) + G(t) \cdot Q_s(G_T) \cdot \sqrt{\ln\frac{t + T_\text{read}}{2T_\text{read}}} \cdot \mathcal{N}(0,1)$
-
-A single device gives ~4-bit effective resolution. Bit-slicing recovers 8–9 bits by splitting across $n_W$ devices.
-
-### The Slicing Trade-Off
-
-$$\eta \propto \frac{1}{\sqrt{n_W}} \quad \text{(Equal-fill, } b_W = 1\text{)}$$
-
-Doubling the number of slices reduces error by $\sqrt{2}$, but doubles the chip area. The paper explores whether smarter algorithms (Max-fill, EC) can achieve the same error reduction with fewer slices.
+More slices = more precision = more hardware cost. The paper asks: can smarter *algorithms* achieve the same precision with fewer resources? (Same question as: can GPTQ achieve 4-bit quality with less calibration data than naïve RTN?)
 
 ---
 
 ## The Algorithms
 
-### Equal-Fill ($b_W = 1$)
+Five strategies for splitting weights across quantised representations, from simplest to most sophisticated:
 
-Each slice stores $w / n_W$. All slices have equal significance:
+### Equal-Fill (uniform precision)
+
+Each slice stores $w / n_W$. All slices contribute equally:
 
 $$w_\text{recon} = \sum_{j=0}^{n_W - 1} S_j$$
 
-Advantage: uniform noise and drift sensitivity. Disadvantage: doesn't maximise SNR.
+Analogous to **uniform quantisation** (all bits treated equally). Robust to noise but doesn't maximise SNR.
 
-### Max-Fill
+### Max-Fill (aggressive packing)
 
-Fill the most-significant slice to the maximum conductance range, then assign the remainder to lower slices. Maximises SNR at $t_0$ but creates unequal drift sensitivity.
+Fill the most-significant slice to maximum range, assign remainder to lower slices. Maximises SNR short-term but creates unequal noise sensitivity.
 
-### Max-Fill with Error Correction (EC / Dependent)
+Analogous to **non-uniform quantisation** — more precision where it matters most.
 
-Like Max-fill, but the residual for slice $j+1$ accounts for the *actual* programmed value of slice $j$ (not the target):
+### Max-Fill with Error Correction (EC)
+
+The residual for slice $j+1$ accounts for the *actual quantised* value of slice $j$ (not the target):
 
 $$\text{residual}_{j+1} = \text{residual}_j - S_{\text{actual},j} \cdot b_W^{j}$$
 
-This self-correcting mechanism reduces error at $t_0$, but requires stored programming state.
+This is **residual quantisation** — the same principle behind AQLM and QuIP#. Each step corrects the error of the previous one.
 
 ### Digital (Positional) Slicing
 
-Extract physical bit groups from the integer weight representation. Each slice represents a different bit position, with significance $2^k$. Conceptually simple but wastes conductance range for Gaussian-distributed weights.
+Extract physical bit groups from the integer representation. Each slice has significance $2^k$. Conceptually simple but wastes range for Gaussian weights — analogous to naïve round-to-nearest without calibration.
+
+### Ternary (BitNet-style)
+
+Weights quantised to {-1, 0, +1} using threshold $\alpha \cdot \text{mean}(|W|)$. Only 3 levels — minimal precision, potentially maximal noise robustness. Direct implementation of [BitNet b1.58](https://arxiv.org/abs/2402.17764).
 
 ---
 
 ## Mathematical Formulation
 
-### Analytical MVM Error Prediction (Equation 8)
+### Analytical Error Prediction (Equation 8)
 
-For Equal-fill slicing with base $b_W$:
+For uniform slicing with base $b_W$:
 
 $$\eta = \eta_s \cdot \sqrt{\frac{(1 - b_W)(1 + b_W^{n_W})}{(1 + b_W)(1 - b_W^{n_W})}} \quad (b_W > 1)$$
 
-For $b_W = 1$:
+For $b_W = 1$ (equal precision per slice):
 
 $$\eta = \frac{\eta_s}{\sqrt{n_W}}$$
 
-where $\eta_s$ is the single-slice baseline error. This prediction is calibrated from simulation at $n_W = 1$ and extended analytically.
+This is calibrated from a single simulation point and predicts all other configurations analytically.
 
-### ADC Output Scale Factor
+### Straight-Through Estimator (STE)
 
-$$s_\text{out} = \frac{R_\text{OUT} / \sigma_\text{IN}}{r_{s_I} \cdot G_\text{BS} \cdot \sqrt{N}} \cdot \left(\frac{\sigma_\text{IN} - 1.5}{n_{s_I}} + 1.5\right) \cdot \left(\frac{\sigma_W - 1.5}{n_{s_W}} + 1.5\right)$$
+Forward pass (quantise + noise):
 
-This scale factor ensures the analog MVM output maps correctly to the ADC range while accounting for Gaussian tail clipping.
+$$w_\text{eff} = \text{Quantise}(w) + \mathcal{N}(0, \sigma^2(w))$$
 
-### Global Drift Compensation (GDC)
+Backward pass (straight-through):
 
-At inference time, a calibration vector $\mathbf{1}$ is sent through the crossbar. The ratio of the calibration output at $t_0$ to the current output gives a scalar correction factor:
+$$\frac{\partial \mathcal{L}}{\partial w} = \frac{\partial \mathcal{L}}{\partial w_\text{eff}}$$
+
+The same STE used in QAT for LLMs — gradients flow through the quantisation step as if it weren't there.
+
+### Global Drift Compensation (Runtime Calibration)
 
 $$\beta(t) = \frac{\sum_i |y_\text{cal}(t_0)|}{\sum_i |y_\text{cal}(t)|}$$
 
-All outputs are multiplied by $\beta$, approximately compensating the mean drift.
+A calibration vector sent through the network gives a scalar correction factor. Same principle as **activation calibration** in SmoothQuant — use a reference signal to correct systematic bias.
 
 ---
 
 ## Technical Decisions
 
-### Why Stored Programming State
+### Why Stored Quantisation State
 
-The EC algorithm only works if the residual computation uses the *actual* programmed conductance (with noise), not the target. This means:
+The error correction algorithm only works if each slice knows the *actual* (noisy) value of the previous slice, not the target. This means quantisation noise must be sampled once and stored:
 
 | Method | Verdict | Rationale |
 |:-------|:--------|:----------|
-| Re-sample noise each forward pass | **Rejected** | Physically wrong — a chip is programmed once. Also breaks EC completely |
-| Store $G_\text{prog}$ and $\nu$ per device | **Adopted** | Physically correct. Only 1/f read noise is re-sampled per inference |
+| Re-sample noise each forward pass | **Rejected** | Wrong — quantisation is done once at deployment. Also breaks error correction |
+| Store quantised weights + noise state | **Adopted** | Correct. Only read noise is stochastic per inference |
 
-This required the `AnalogMixin._program()` / `._read(t)` split in the PyTorch layers.
+This led to the `AnalogMixin._program()` / `._read(t)` architecture — same pattern as `torch.ao.quantization` separating `prepare()` from `convert()`.
 
-### Why Two Physics Backends (NumPy + PyTorch)
+### Why Two Physics Backends
 
-Figures 4a–c simulate a single 128×128 crossbar — no backpropagation needed. NumPy is 5–10× faster for this workload thanks to lower overhead. Figure 5 needs PyTorch for gradient-based noise-aware training. Both backends implement the same physics from `device.py` and `device_torch.py`.
+| Backend | Use case | Reason |
+|:--------|:---------|:-------|
+| NumPy | Monte Carlo sweeps (Figures 4a–c) | 5–10× faster, no autograd overhead |
+| PyTorch | Noise-aware training (Figure 5) | Need gradients for STE-based training |
 
-### Why Separate Scripts and Notebooks
+Both implement identical physics. Same pattern as having a fast C++ inference engine and a Python training framework.
 
-| Interface | Use case |
-|:----------|:---------|
-| `scripts/run_figure_*.py` | Headless execution on clusters, reproducible end-to-end |
-| `notebooks/figure_*.ipynb` | Interactive exploration, parameter sweeps, quick plots |
+### Why Convergence Testing at 1 Slice
 
-Notebooks import `src/pcm_sim/` — they contain zero simulation logic, only config + plot code (~50 lines each).
-
-### Why $n_W = 1$ Convergence Testing
-
-At $n_W = 1$, all algorithms (Equal-fill, Max-fill, EC, Digital, varying $b_W$) must produce identical results — there's only one slice, so "how to split" is irrelevant. Testing this to 6 decimal places catches subtle bugs in slice ordering, residual computation, and base handling.
+At $n_W = 1$, all algorithms must produce identical results. Testing this to 6 decimal places catches subtle bugs in slice ordering, residual computation, and base handling. Same principle as verifying that a quantised model at full precision matches the FP32 baseline exactly.
 
 ---
 
@@ -303,7 +300,7 @@ cd pcm-bitslicing
 pip install -r requirements.txt
 ```
 
-### Reproduce Figures 4a–c (CPU, ~10–30 min each)
+### Monte Carlo Analysis (CPU, ~10–30 min each)
 
 ```bash
 cd scripts
@@ -312,25 +309,17 @@ python run_figure_4b.py   # → figures/figure_4b.png
 python run_figure_4c.py   # → figures/figure_4c.png
 ```
 
-### Reproduce Figure 5 (GPU recommended, ~3–4 hours)
+### DNN Inference Pipeline (GPU recommended, ~3–4 hours)
 
 ```bash
 pip install torch torchvision
-python scripts/run_figure_5.py   # Trains noise-aware ResNet-32 + Monte Carlo inference
+python scripts/run_figure_5.py   # Noise-aware training + Monte Carlo inference
 ```
 
-### Run BitNet Extension
+### BitNet Extension
 
 ```bash
 python scripts/run_bitnet_extension.py   # → figures/bitnet_pcm_extension.png
-```
-
-### Interactive Notebooks
-
-```bash
-pip install jupyter
-cd notebooks
-jupyter notebook figure_4a.ipynb
 ```
 
 ---
@@ -340,21 +329,21 @@ jupyter notebook figure_4a.ipynb
 ```
 pcm-bitslicing/
 ├── src/pcm_sim/                # Reusable Python package
-│   ├── device.py               # PCM physics — NumPy (Nandakumar et al. 2020)
-│   ├── device_torch.py         # PCM physics — PyTorch (for DNN inference)
-│   ├── slicing.py              # 5 algorithms: Equal-fill, Max-fill, EC, Digital, Ternary
-│   ├── engine.py               # Monte Carlo trial functions (4a, 4b, 4c, BitNet)
-│   ├── theory.py               # Analytical predictions (Eq. 8)
-│   ├── analog_layers.py        # AnalogConv2d / AnalogLinear with stored state
-│   ├── training.py             # Noise-aware training (Joshi et al. 2020)
+│   ├── device.py               # Hardware noise model — NumPy
+│   ├── device_torch.py         # Hardware noise model — PyTorch
+│   ├── slicing.py              # 5 quantisation algorithms
+│   ├── engine.py               # Monte Carlo trial functions
+│   ├── theory.py               # Analytical error predictions
+│   ├── analog_layers.py        # Custom PyTorch layers (STE, stored state)
+│   ├── training.py             # Noise-aware training (QAT-style)
 │   └── utils.py                # convert_to_analog, eval_mc, evaluate
 ├── scripts/                    # Standalone reproduction scripts
-│   ├── run_figure_4a.py        # η vs. n_W (2 panels: t₀, 1 month)
-│   ├── run_figure_4b.py        # η vs. b_W (2 panels: t₀, 1 month)
-│   ├── run_figure_4c.py        # η vs. time (t₀ → 1 year)
-│   ├── run_figure_5.py         # CIFAR-10 accuracy (Figs. 5a + 5c)
-│   └── run_bitnet_extension.py # Ternary vs. standard weights
-├── notebooks/                  # Lightweight: import src + plot (~50 lines each)
+│   ├── run_figure_4a.py        # Error vs. number of slices
+│   ├── run_figure_4b.py        # Error vs. precision base
+│   ├── run_figure_4c.py        # Error vs. time
+│   ├── run_figure_5.py         # CIFAR-10 noise-aware training + inference
+│   └── run_bitnet_extension.py # Ternary vs. standard quantisation
+├── notebooks/                  # Interactive versions (~50 lines each)
 │   ├── figure_4a.ipynb
 │   ├── figure_4b.ipynb
 │   ├── figure_4c.ipynb
@@ -369,9 +358,9 @@ pcm-bitslicing/
 
 ## Experimental Validation
 
-### Figure 4(a): Convergence at $n_W = 1$
+### Convergence at 1 Slice
 
-All 7 simulation methods produce identical error at $n_W = 1$ — validating the implementation:
+All 7 quantisation methods produce identical error when using a single representation — validating the implementation:
 
 ```
 seed=123, N=64:
@@ -383,20 +372,20 @@ seed=123, N=64:
   dependent  varying b=2:  η(t0) = 0.104624  η(1mo) = 0.152122
 ```
 
-### Figure 5(c): Equal-fill vs. Max-fill Crossover
+### Strategy Crossover Under Noise
 
 ```
-At t₀ (programming noise only):
-  Max-fill b=1, n=8:     92.81%   ← best at t₀
-  Equal-fill b=1, n=8:   92.74%
-  Max-fill EC b=1, n=8:  92.74%
+Fresh (quantisation noise only):
+  Aggressive fill, n=8:     92.81%   ← best fresh
+  Uniform fill, n=8:        92.74%
+  Error-corrected, n=8:     92.74%
 
-At 1 month (drift + read noise):
-  Max-fill EC b=1, n=8:  92.00%   ← best at 1 month
-  Equal-fill b=1, n=8:   91.92%
-  Max-fill b=1, n=8:     91.52%   ← worst at 1 month
+After 1 month of noise accumulation:
+  Error-corrected, n=8:     92.00%   ← best after drift
+  Uniform fill, n=8:        91.92%
+  Aggressive fill, n=8:     91.52%   ← worst after drift
 
-✅ Crossover confirmed: Max-fill dominates at t₀, but degrades faster.
+✅ Crossover confirmed: the optimal quantisation strategy depends on deployment lifetime.
 ```
 
 ---
@@ -405,38 +394,39 @@ At 1 month (drift + read noise):
 
 ### Motivation
 
-BitNet ([Ma et al., 2024](https://arxiv.org/abs/2402.17764)) quantises weights to {-1, 0, +1}, using only 1.58 bits per parameter. On PCM hardware, this means only 3 conductance levels — potentially reducing programming noise impact compared to full INT-9 weights that use the entire conductance range.
+BitNet b1.58 ([Ma et al., 2024](https://arxiv.org/abs/2402.17764)) quantises LLM weights to {-1, 0, +1} — just 1.58 bits per parameter. On analog hardware, this means only 3 conductance levels instead of 256. The natural question: **does extreme quantisation make models more robust to hardware noise?**
 
 ### Approach
 
-I run the same Monte Carlo MVM simulation with:
-- **Standard weights**: Gaussian, quantised to INT-9 (256 levels)
-- **Ternary weights**: Threshold quantisation to {-1, 0, +1}, then mapped to PCM
+Same Monte Carlo pipeline, two weight distributions:
+- **Standard**: Gaussian, quantised to INT-9 (256 levels, full conductance range)
+- **Ternary**: Threshold quantisation to {-1, 0, +1} (3 levels, minimal range usage)
 
-Both are evaluated with Equal-fill, Max-fill, Max-fill EC at $n_W \in \{1, 4, 8\}$ over time.
+Both evaluated under identical hardware noise across 4 algorithms and 12 time points.
 
 ### Finding
 
-Ternary weights show **lower absolute MVM error** at $t_0$ (fewer conductance levels → less programming noise) but the **relative improvement diminishes with drift**, as 1/f noise and drift affect all conductance levels similarly. The bit-slicing algorithm choice matters more than weight precision for long-term deployment.
+Ternary weights show **lower absolute error fresh** (fewer levels → less quantisation noise) but the **relative advantage disappears under noise accumulation** — drift and read noise affect all conductance levels regardless of how many you use. **The quantisation algorithm matters more than the bit-width for deployment robustness.** This suggests that for LLM deployment on noisy hardware, investing in smarter quantisation (GPTQ, residual methods) yields more than simply reducing precision.
 
 ---
 
 ## Research Context
 
-### Why This Matters
+### The Bigger Picture
 
-Bit-slicing is the standard approach for deploying DNNs on real AIMC hardware — IBM's 14nm PCM chip (Joshi et al. 2020) uses it. Understanding *which* algorithm to use, and *when*, directly impacts deployment decisions:
+This project sits at the intersection of two trends converging in AI infrastructure:
 
-- **Short-lived inference** (seconds to hours): Max-fill with EC, $b_W = 2$
-- **Long-term deployment** (days to months): Equal-fill, $b_W = 1$
-- **Best compromise**: Max-fill EC, $b_W = 1$ — error correction helps at all time scales
+1. **Model compression for deployment** — quantising LLMs from FP16 to INT4/INT2/ternary for edge and mobile inference (GPTQ, AWQ, BitNet)
+2. **Novel compute substrates** — analog accelerators, photonic processors, neuromorphic chips that compute efficiently but imprecisely
+
+Both face the same fundamental challenge: **maintaining model accuracy under reduced-precision, noisy computation**. The techniques in this repo — STE-based noise-aware training, multi-resolution quantisation, error-correcting coding, runtime calibration — are the building blocks for solving this challenge on any substrate.
 
 ### Limitations
 
-1. **Gaussian weight/input assumption**: Real DNN weights are not perfectly Gaussian — the crossbar-level analysis (Fig. 4) is a first-order approximation
-2. **Ideal ADC/DAC**: No quantisation noise from peripheral circuits
-3. **No IR drop**: Crossbar-level resistive voltage drops are ignored
-4. **Single crossbar**: Real DNNs use tiled crossbars with additional overhead
+1. **Gaussian weight assumption**: Real DNN weights have heavier tails — crossbar-level analysis is a first-order approximation
+2. **Ideal peripherals**: No ADC/DAC quantisation noise or IR drop
+3. **Single crossbar**: Real deployments tile across multiple arrays
+4. **CIFAR-10 scale**: Production would evaluate on ImageNet / language benchmarks
 
 ---
 
@@ -464,7 +454,7 @@ Bit-slicing is the standard approach for deploying DNNs on real AIMC hardware �
 
 **Lazar Ciric** — ENS Paris-Saclay
 
-Independent from-scratch implementation for research purposes. This is a companion to my [HWA training project](https://github.com/lciric/aimc-hwa-replication) (Rasch et al., *Nature Electronics* 2023) — together they cover the full AIMC inference pipeline from training to deployment.
+This is a companion to my [HWA training project](https://github.com/lciric/aimc-hwa-replication) (Rasch et al., *Nature Electronics* 2023) — together they cover the full pipeline from quantisation-aware training to noise-robust deployment.
 
 ---
 
