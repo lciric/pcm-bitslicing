@@ -7,9 +7,7 @@
   <img src="https://img.shields.io/badge/DOI-10.1063%2F5.0168089-blue" alt="DOI">
 </p>
 
-How do you deploy a neural network when your hardware introduces noise at every weight? This project builds a **complete quantisation-aware inference pipeline** — from custom PyTorch layers with noisy forward / clean backward passes (STE), to Monte Carlo robustness evaluation, to noise-aware training — applied to **analog in-memory computing (AIMC)** on Phase-Change Memory. Includes an **original extension** evaluating BitNet-style ternary {-1, 0, +1} quantisation.
-
-**Paper**: [Le Gallo et al., *APL Machine Learning* 2023](https://doi.org/10.1063/5.0168089) | Device models from [Joshi et al., *Nature Communications* 2020](https://doi.org/10.1038/s41467-020-16108-9)
+How do you deploy a neural network when your hardware introduces noise at every weight? This repository contains my code for the bit-slicing framework published in [Le Gallo, Ciric et al., *APL Machine Learning* 2023](https://doi.org/10.1063/5.0168089), of which I am co-author. It implements a **complete quantisation-aware inference pipeline** — from custom PyTorch layers with noisy forward / clean backward passes (STE), to Monte Carlo robustness evaluation, to noise-aware training ([Joshi et al. 2020](https://doi.org/10.1038/s41467-020-16108-9)) — applied to **analog in-memory computing** on Phase-Change Memory. I also include an **original extension** evaluating BitNet-style ternary {-1, 0, +1} quantisation on the same hardware simulator.
 
 ---
 
@@ -17,7 +15,7 @@ How do you deploy a neural network when your hardware introduces noise at every 
 
 Deploying DNNs in reduced precision is hard. Quantisation introduces error. Hardware introduces noise. And these errors compound over time. This is true whether you're quantising a Llama model to 4-bit integers for edge deployment, or programming weights into analog memory devices.
 
-This project tackles the problem on **PCM hardware** — where weights are physical conductance values that drift over time — but the core techniques are universal:
+My research tackles this problem on **PCM hardware** — where weights are physical conductance values that drift over time — but the core techniques are the same ones used across the LLM deployment stack today:
 
 | What I implemented | Same technique in LLM deployment |
 |:-------------------|:---------------------------------|
@@ -190,7 +188,7 @@ A single device gives ~4-bit precision. **Bit-slicing** recovers 8–9 bits by s
 
 $$\eta \propto \frac{1}{\sqrt{n_W}}$$
 
-More slices = more precision = more hardware cost. The paper asks: can smarter *algorithms* achieve the same precision with fewer resources? (Same question as: can GPTQ achieve 4-bit quality with less calibration data than naïve RTN?)
+More slices = more precision = more hardware cost. Our paper asks: can smarter *algorithms* achieve the same precision with fewer resources? (Same question as: can GPTQ achieve 4-bit quality with less calibration data than naïve RTN?)
 
 ---
 
@@ -421,6 +419,12 @@ This project sits at the intersection of two trends converging in AI infrastruct
 
 Both face the same fundamental challenge: **maintaining model accuracy under reduced-precision, noisy computation**. The techniques in this repo — STE-based noise-aware training, multi-resolution quantisation, error-correcting coding, runtime calibration — are the building blocks for solving this challenge on any substrate.
 
+### Related Work
+
+The noise-aware training pipeline is based on [Joshi et al., *Nature Communications* 2020](https://doi.org/10.1038/s41467-020-16108-9), which demonstrated that injecting realistic hardware noise during training makes models robust to analog imperfections.
+
+I later extended this line of work in a separate project on [Hardware-Aware Training](https://github.com/lciric/aimc-hwa-replication) (Rasch et al., *Nature Electronics* 2023), which covers the full training side of the pipeline — knowledge distillation, noise ramping, CAWS — complementing the deployment and inference focus of this repository.
+
 ### Limitations
 
 1. **Gaussian weight assumption**: Real DNN weights have heavier tails — crossbar-level analysis is a first-order approximation
@@ -432,14 +436,14 @@ Both face the same fundamental challenge: **maintaining model accuracy under red
 
 ## Citation
 
+If you use this code, please cite our paper:
+
 ```bibtex
 @article{legallo2023using,
   title={Using the {IBM} Analog In-Memory Hardware Acceleration Kit 
          for Neural Network Training and Inference},
-  author={Le Gallo, Manuel and Lammie, Corey and B{\"u}chel, Julian 
-          and Carta, Fabio and Fagbohungbe, Omobayode and Mackin, Charles 
-          and Tsai, Hsinyu and Narayanan, Vijay and Sebastian, Abu 
-          and El Maghraoui, Kaoutar and Rasch, Malte J},
+  author={Le Gallo, Manuel and Lammie, Corey and Ciric, Lazar
+          and Carta, Fabio and others},
   journal={APL Machine Learning},
   volume={1},
   number={4},
@@ -454,7 +458,7 @@ Both face the same fundamental challenge: **maintaining model accuracy under red
 
 **Lazar Ciric** — ENS Paris-Saclay
 
-This is a companion to my [HWA training project](https://github.com/lciric/aimc-hwa-replication) (Rasch et al., *Nature Electronics* 2023) — together they cover the full pipeline from quantisation-aware training to noise-robust deployment.
+Co-author of the bit-slicing publication. This repository contains my implementation of the simulation framework and an original extension to ternary weight quantisation.
 
 ---
 
