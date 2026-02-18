@@ -66,14 +66,21 @@ My research tackles this problem on **PCM hardware** — where weights are physi
 
 ### DNN Inference with Noise-Aware Training
 
-| Configuration | Accuracy @ $t_0$ | Accuracy @ 1 month | Accuracy @ 1 year |
-|:-------------|:------------------|:--------------------|:-------------------|
-| Digital baseline (FP32) | 93.5% | — | — |
-| 8 slices, aggressive fill | 92.8% | 91.5% | 90.5% |
-| 8 slices, error-corrected | 92.7% | 92.0% | — |
-| 8 slices, uniform fill | 92.7% | 91.9% | — |
+ResNet-32 on CIFAR-10, 100 Monte Carlo inference runs per configuration:
 
-Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of digital accuracy** even under realistic hardware noise. The error-corrected algorithm achieves the best long-term robustness — analogous to how residual quantisation outperforms naïve round-to-nearest in LLM compression.
+| Configuration ($n_W = 8$) | Accuracy @ $t_0$ | Accuracy @ 1 month |
+|:--------------------------|:------------------|:--------------------|
+| Digital baseline (FP32) | 93.5% | — |
+| Equal-fill ($b_W = 1$) | 92.74 ± 0.06% | **91.92 ± 0.13%** |
+| Max-fill ($b_W = 1$) | **92.81 ± 0.04%** | 91.52 ± 0.15% |
+| Max-fill EC ($b_W = 1$) | 92.74 ± 0.04% | **92.00 ± 0.13%** |
+| Max-fill ($b_W = 2$) | 92.79 ± 0.06% | 91.31 ± 0.20% |
+| Max-fill EC ($b_W = 2$) | 92.75 ± 0.04% | 91.88 ± 0.18% |
+
+Key takeaways:
+- **Noise-aware training (STE + noise injection) recovers >99% of digital accuracy** even under realistic hardware noise
+- **Crossover confirmed**: Max-fill ($b_W = 1$) wins at $t_0$ (92.81%) but Equal-fill ($b_W = 1$) overtakes at 1 month (91.92% vs 91.52%) — because drift acts as multiplicative noise, making equal-significance averaging optimal over time
+- Max-fill EC ($b_W = 1$) achieves the best 1-month accuracy (92.00%) — residual quantisation corrects drift errors across slices
 
 ### The Optimal Strategy Flips Over Time
 
@@ -209,27 +216,31 @@ More slices = more precision = more hardware cost. Our paper asks: can smarter *
 
 Five strategies for splitting weights across quantised representations, from simplest to most sophisticated:
 
-### Equal-Fill (uniform precision)
+### Equal-Fill
 
-Each slice stores $w / n_W$. All slices contribute equally:
+All slices are programmed to the same value. Each slice $j$ has significance $b_W^j$, where $b_W$ is the base:
 
-$$w_\text{recon} = \sum_{j=0}^{n_W - 1} S_j$$
+$$w_\text{recon} = \sum_{j=0}^{n_W - 1} S_j \cdot b_W^j, \quad \text{with } S_j = S \text{ for all } j$$
 
-Analogous to **uniform quantisation** (all bits treated equally). Robust to noise but doesn't maximise SNR.
+With $b_W = 1$ (equal significance), all slices contribute equally and errors average as $\eta_s / \sqrt{n_W}$ — optimal when drift (multiplicative noise) dominates. With $b_W = 2$ (varying significance), slices have different weights, reducing the averaging benefit but extending dynamic range.
 
-### Max-Fill (aggressive packing)
+### Max-Fill
 
-Fill the most-significant slice to maximum range, assign remainder to lower slices. Maximises SNR short-term but creates unequal noise sensitivity.
+Maximises the number of zero slices: fill the most-significant slice to its maximum range $r_{s\_W}$, assign the remainder to lower slices. Works with any base $b_W$. Zero slices are fully RESET (no programming noise), and non-zero slices are programmed close to $G_\text{max}$ (high SNR). This enables lower error than Equal-Fill at $t_0$ when programming noise dominates.
 
-Analogous to **non-uniform quantisation** — more precision where it matters most.
+However, as time elapses and conductance drift becomes the dominant noise source (multiplicative noise), the advantage diminishes — equal significance ($b_W = 1$) with Equal-Fill begins to show lower error, because averaging between equal-significance slices is optimal under multiplicative noise.
 
 ### Max-Fill with Error Correction (EC)
 
-The residual for slice $j+1$ accounts for the *actual quantised* value of slice $j$ (not the target):
+Extension of Max-Fill: after programming each slice, the measured error between target and actual programmed value is carried forward to subsequent slices. The residual for slice $j+1$ accounts for the *actual* (noisy) value of slice $j$:
 
 $$\text{residual}_{j+1} = \text{residual}_j - S_{\text{actual},j} \cdot b_W^{j}$$
 
-This is **residual quantisation** — the same principle behind AQLM and QuIP#. Each step corrects the error of the previous one.
+Error correction is more effective with $b_W > 1$ (e.g. $b_W = 2$), because errors from a high-significance slice are corrected by a lower-significance slice. This gives Max-Fill EC ($b_W = 2$) the lowest MVM error at $t_0$. However, as $b_W$ increases further, the averaging benefit is lost and the MSB slice error dominates — so $b_W = 2$ is the sweet spot for EC.
+
+Over time, the benefits vanish: drift (multiplicative noise) causes the rate of error increase to be higher for $b_W > 1$, and using $b_W > 1$ for $n_W > 2$ becomes detrimental. Equal-significance averaging ($b_W = 1$) wins long-term.
+
+This is **residual quantisation** — the same principle behind AQLM and QuIP#.
 
 ### Digital (Positional) Slicing
 
