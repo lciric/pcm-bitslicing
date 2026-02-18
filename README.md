@@ -91,13 +91,13 @@ Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of di
 
 <p align="center"><em>Left: error correction keeps error low across all slice counts. Right: the crossover between Max-fill and Equal-fill is clearly visible — the optimal deployment strategy depends on inference lifetime.</em></p>
 
-### DNN Inference: Accuracy Degrades Gracefully with More Slices
+### DNN Inference: Bit Slicing Improves Accuracy and Retention Through Averaging
 
 <p align="center">
   <img src="figures/figure_5a.png" alt="CIFAR-10 accuracy vs time for different slice counts" width="70%">
 </p>
 
-<p align="center"><em>Figure 5(a): ResNet-32 on CIFAR-10 with noise-aware training (STE). More slices → slower degradation. Even with 1 slice, accuracy stays above 90% at 1 year thanks to QAT-style training. 100 Monte Carlo inference runs.</em></p>
+<p align="center"><em>Figure 5(a): ResNet-32 on CIFAR-10 with noise-aware training and max-fill (bW=1). More slices → higher accuracy, better retention over time, and reduced variability across hardware instances. Unlike digital bit slicing (which extends dynamic range), analog bit slicing reduces error through averaging within a fixed dynamic range. 100 Monte Carlo inference runs.</em></p>
 
 ### The Crossover Confirmed at DNN Level
 
@@ -105,7 +105,7 @@ Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of di
   <img src="figures/figure_5c.png" alt="CIFAR-10 accuracy vs number of slices at t₀ and 1 month" width="90%">
 </p>
 
-<p align="center"><em>Figure 5(c): Five quantisation configurations at t₀ and 1 month. At t₀ all methods are close; at 1 month, Max-fill EC (b_W = 1) and Max-fill EC (b_W = 2) achieve the best robustness — error correction pays off over time. 100 inference runs.</em></p>
+<p align="center"><em>Figure 5(c): Five quantisation configurations at t₀ and 1 month. At t₀, max-fill algorithms achieve the best accuracy. After 1 month, equal-fill with bW=1 performs at least equally well — because conductance drift acts as multiplicative noise, making equal-significance averaging (bW=1) optimal over time. The optimal deployment strategy depends on the inference lifetime.</em></p>
 
 ### BitNet Extension: Ternary vs. Standard Weights Under Hardware Noise
 
