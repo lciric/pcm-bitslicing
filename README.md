@@ -4,10 +4,10 @@
   <img src="https://img.shields.io/badge/Python-%3E%3D3.10-blue" alt="Python">
   <img src="https://img.shields.io/badge/PyTorch-%3E%3D2.0-red" alt="PyTorch">
   <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
-  <img src="https://img.shields.io/badge/DOI-10.1063%2F5.0168089-blue" alt="DOI">
+  <img src="https://img.shields.io/badge/DOI-10.1088%2F2634--4386%2Fac4fb7-blue" alt="DOI">
 </p>
 
-How do you deploy a neural network when your hardware introduces noise at every weight? This repository contains my code for the bit-slicing framework published in [Le Gallo, Ciric et al., *APL Machine Learning* 2023](https://doi.org/10.1063/5.0168089), of which I am co-author. It implements a **complete quantisation-aware inference pipeline** — from custom PyTorch layers with noisy forward / clean backward passes (STE), to Monte Carlo robustness evaluation, to noise-aware training ([Joshi et al. 2020](https://doi.org/10.1038/s41467-020-16108-9)) — applied to **analog in-memory computing** on Phase-Change Memory. I also include an **original extension** evaluating BitNet-style ternary {-1, 0, +1} quantisation on the same hardware simulator.
+How do you deploy a neural network when your hardware introduces noise at every weight? This repository contains my code for the bit-slicing framework published in [Le Gallo, Ciric et al., *Neuromorphic Computing and Engineering* 2022](https://iopscience.iop.org/article/10.1088/2634-4386/ac4fb7), of which I am co-author. It implements a **complete quantisation-aware inference pipeline** — from custom PyTorch layers with noisy forward / clean backward passes (STE), to Monte Carlo robustness evaluation, to noise-aware training ([Joshi et al. 2020](https://doi.org/10.1038/s41467-020-16108-9)) — applied to **analog in-memory computing** on Phase-Change Memory. I also include an **original extension** evaluating BitNet-style ternary {-1, 0, +1} quantisation on the same hardware simulator.
 
 ---
 
@@ -91,6 +91,22 @@ Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of di
 
 <p align="center"><em>Left: error correction keeps error low across all slice counts. Right: the crossover between Max-fill and Equal-fill is clearly visible — the optimal deployment strategy depends on inference lifetime.</em></p>
 
+### DNN Inference: Accuracy Degrades Gracefully with More Slices
+
+<p align="center">
+  <img src="figures/figure_5a.png" alt="CIFAR-10 accuracy vs time for different slice counts" width="70%">
+</p>
+
+<p align="center"><em>Figure 5(a): ResNet-32 on CIFAR-10 with noise-aware training (STE). More slices → slower degradation. Even with 1 slice, accuracy stays above 90% at 1 year thanks to QAT-style training. 100 Monte Carlo inference runs.</em></p>
+
+### The Crossover Confirmed at DNN Level
+
+<p align="center">
+  <img src="figures/figure_5c.png" alt="CIFAR-10 accuracy vs number of slices at t₀ and 1 month" width="90%">
+</p>
+
+<p align="center"><em>Figure 5(c): Five quantisation configurations at t₀ and 1 month. At t₀ all methods are close; at 1 month, Max-fill EC (b_W = 1) and Max-fill EC (b_W = 2) achieve the best robustness — error correction pays off over time. 100 inference runs.</em></p>
+
 ### BitNet Extension: Ternary vs. Standard Weights Under Hardware Noise
 
 <p align="center">
@@ -99,16 +115,13 @@ Key takeaway: **noise-aware training (STE + noise injection) recovers >99% of di
 
 <p align="center"><em>Ternary {-1,0,+1} weights (right) start with lower error but the advantage narrows under drift. The quantisation algorithm matters more than bit-width for long-term robustness.</em></p>
 
-<details>
-<summary><strong>Additional figures (click to expand)</strong></summary>
+### Higher Precision Base Hurts Long-Term Robustness
 
-#### Error vs. precision base
 <p align="center">
-  <img src="figures/figure_4b.png" alt="Figure 4b" width="90%">
+  <img src="figures/figure_4b.png" alt="Figure 4b" width="100%">
 </p>
-<p align="center"><em>Mixed-precision (higher base) amplifies MSB noise under drift — uniform precision ($b_W = 1$) is safer for deployment.</em></p>
 
-</details>
+<p align="center"><em>Mixed-precision (higher base $b_W$) amplifies MSB noise under drift — uniform precision ($b_W = 1$) is safer for deployment.</em></p>
 
 ---
 
@@ -439,16 +452,17 @@ I later extended this line of work in a separate project on [Hardware-Aware Trai
 If you use this code, please cite our paper:
 
 ```bibtex
-@article{legallo2023using,
-  title={Using the {IBM} Analog In-Memory Hardware Acceleration Kit 
-         for Neural Network Training and Inference},
-  author={Le Gallo, Manuel and Lammie, Corey and Ciric, Lazar
-          and Carta, Fabio and others},
-  journal={APL Machine Learning},
-  volume={1},
-  number={4},
-  year={2023},
-  publisher={AIP Publishing}
+@article{legallo2022precision,
+  title={Precision of bit slicing with in-memory computing based on 
+         analog phase-change memory crossbars},
+  author={Le Gallo, Manuel and Ciric, Lazar and Sebastian, Abu 
+          and others},
+  journal={Neuromorphic Computing and Engineering},
+  volume={2},
+  number={2},
+  pages={024003},
+  year={2022},
+  publisher={IOP Publishing}
 }
 ```
 
